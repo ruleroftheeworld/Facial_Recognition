@@ -7,20 +7,14 @@
   },
   "recognition": {
     "model_name": "buffalo_l",
-    "embedding_threshold": 0.45,
-    "min_face_size": 40
+    "embedding_threshold": 0.60,
+    "min_face_size": 40,
+    "re_recognition_frames": 150
   },
   "tracking": {
-    "max_disappeared": 30,
+    "max_disappeared": 40,
     "max_distance": 80,
     "tracker_type": "bytetrack"
-  },
-  "zones": {
-    "entry_zone_ratio": 0.20,
-    "exit_zone_ratio": 0.20,
-    "tripwire_ratio": 0.50,
-    "direction": "left-to-right",
-    "re_entry_cooldown_seconds": 60
   },
   "database": {
     "uri": "mongodb://localhost:27017",
