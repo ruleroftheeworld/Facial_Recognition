@@ -1,20 +1,31 @@
 {
   "detection": {
-    "frame_skip": 3,
+    "frame_skip": 5,
     "confidence_threshold": 0.5,
     "iou_threshold": 0.4,
-    "yolo_model": "yolov8n-face.pt"
+    "yolo_model": "yolov8n-face.pt",
+    "input_width": 640,
+    "input_height": 360
   },
   "recognition": {
     "model_name": "buffalo_l",
     "embedding_threshold": 0.60,
+    "duplicate_guard_threshold": 0.75,
     "min_face_size": 40,
-    "re_recognition_frames": 150
+    "min_face_area": 1600,
+    "embedding_avg_frames": 5,
+    "min_track_frames_for_recognition": 5,
+    "quality_laplacian_threshold": 80.0
   },
   "tracking": {
     "max_disappeared": 40,
     "max_distance": 80,
     "tracker_type": "bytetrack"
+  },
+  "reid": {
+    "ghost_ttl_seconds": 8,
+    "ghost_max_bbox_dist": 200,
+    "ghost_sim_threshold": 0.55
   },
   "database": {
     "uri": "mongodb://localhost:27017",
@@ -23,12 +34,15 @@
       "faces": "faces",
       "events": "events",
       "visitors": "visitors"
-    }
+    },
+    "async_write": true,
+    "async_queue_size": 500
   },
   "logging": {
     "log_file": "logs/events.log",
     "image_base_dir": "logs",
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "fps_log_interval": 100
   },
   "camera": {
     "source": "sample_video.mp4",

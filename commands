@@ -1,1 +1,16 @@
-python main.py --source /Users/admin/Desktop/dharani/face_tracker/sample.mp4
+# 1. Install deps
+pip install -r requirements.txt
+
+# 2. Start MongoDB
+docker-compose up -d
+
+
+# 5. View stats
+python scripts/view_stats.py
+
+
+
+
+
+python main.py --source C:\Users\JEEVIKA\OneDrive\Desktop\face_recognizer\Facial_Recognition\sample.mp4
+streamlit run frontend/dashboard.py

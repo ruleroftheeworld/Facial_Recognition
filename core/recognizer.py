@@ -1,29 +1,44 @@
 """
 core/recognizer.py
-InsightFace-based face embedding generator and matcher.
+InsightFace ArcFace embedding generator.
+
+OPTIMIZATION 4 — GPU acceleration:
+  - CUDAExecutionProvider is always listed first; ONNX Runtime picks it if
+    a CUDA-capable GPU is present, falls back to CPU automatically.
+  - Provider actually used is logged at startup so you can verify at runtime.
+
+OPTIMIZATION 5 — Quality filtering:
+  - Laplacian variance check rejects blurry crops before embedding.
+  - Configurable quality_laplacian_threshold (default 80).
+  - min_face_size gate already existed; kept and documented.
 """
 
 import logging
 from typing import List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
 class FaceRecognizer:
-    """
-    Generates 512-d ArcFace embeddings via InsightFace.
-    Falls back to a simple ResNet feature extractor if InsightFace is absent.
-    """
+    """InsightFace ArcFace embeddings with GPU + quality optimisations."""
 
-    def __init__(self, model_name: str = "buffalo_l",
-                 embedding_threshold: float = 0.45,
-                 min_face_size: int = 40):
-        self.threshold = embedding_threshold
+    def __init__(
+        self,
+        model_name: str = "buffalo_l",
+        embedding_threshold: float = 0.60,
+        min_face_size: int = 40,
+        # OPTIMIZATION 5
+        quality_laplacian_threshold: float = 80.0,
+    ):
+        self.threshold   = embedding_threshold
         self.min_face_size = min_face_size
-        self.app = None
+        self.quality_lap = quality_laplacian_threshold  # OPTIMIZATION 5
+        self.app         = None
         self.use_fallback = False
+        self._active_provider: str = "unknown"
         self._load_model(model_name)
 
     # ------------------------------------------------------------------ #
@@ -32,100 +47,120 @@ class FaceRecognizer:
 
     def _load_model(self, model_name: str):
         try:
-            import insightface
             from insightface.app import FaceAnalysis
 
-            self.app = FaceAnalysis(
-                name=model_name,
-                providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-            )
+            # OPTIMIZATION 4 — list CUDA first; ONNX Runtime auto-selects
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            self.app  = FaceAnalysis(name=model_name, providers=providers)
             self.app.prepare(ctx_id=0, det_size=(640, 640))
-            logger.info("InsightFace model '%s' loaded.", model_name)
-        except ImportError:
-            logger.warning(
-                "insightface not installed – using lightweight fallback embedder."
-            )
-            self._load_fallback()
 
-    def _load_fallback(self):
-        """Simple OpenCV DNN-based face descriptor (less accurate but dependency-free)."""
-        self.use_fallback = True
-        logger.info("Fallback face embedder active (lower accuracy).")
+            # Verify which provider is actually active
+            self._log_active_provider()
+            logger.info("InsightFace '%s' loaded. Provider: %s",
+                        model_name, self._active_provider)
+        except ImportError:
+            logger.warning("insightface not installed — using HOG fallback.")
+            self.use_fallback = True
+
+    def _log_active_provider(self):
+        """
+        OPTIMIZATION 4 — runtime provider verification.
+        Checks the first model's session to confirm CUDA vs CPU.
+        """
+        try:
+            session = self.app.models[list(self.app.models.keys())[0]].session
+            providers = session.get_providers()
+            self._active_provider = providers[0] if providers else "unknown"
+            if "CUDA" in self._active_provider:
+                logger.info("InsightFace is running on GPU (CUDA).")
+            else:
+                logger.warning(
+                    "InsightFace is running on CPU. "
+                    "Install onnxruntime-gpu for GPU acceleration."
+                )
+        except Exception:
+            self._active_provider = "unknown"
 
     # ------------------------------------------------------------------ #
-    #  Embedding generation                                                #
+    #  Embedding                                                           #
     # ------------------------------------------------------------------ #
 
     def get_embedding(self, face_crop: np.ndarray) -> Optional[np.ndarray]:
         """
-        Given a cropped face image (BGR, numpy array), return a normalised
-        embedding vector, or None if no face detected in the crop.
+        Generate L2-normalised 512-d ArcFace embedding.
+
+        OPTIMIZATION 5 — quality gates applied before expensive inference:
+          1. Minimum size check (min_face_size).
+          2. Laplacian blur check (quality_laplacian_threshold).
         """
         if face_crop is None or face_crop.size == 0:
             return None
+
         h, w = face_crop.shape[:2]
+
+        # Gate 1: minimum size
         if h < self.min_face_size or w < self.min_face_size:
             return None
 
+        # OPTIMIZATION 5 Gate 2: blur / quality check
+        if not self._is_sharp(face_crop):
+            logger.debug("Crop rejected: below blur threshold.")
+            return None
+
         if self.use_fallback:
-            return self._fallback_embedding(face_crop)
+            return self._hog_embedding(face_crop)
         return self._insightface_embedding(face_crop)
 
-    def _insightface_embedding(self, face_crop: np.ndarray) -> Optional[np.ndarray]:
-        faces = self.app.get(face_crop)
+    def _is_sharp(self, crop: np.ndarray) -> bool:
+        """
+        OPTIMIZATION 5 — Laplacian variance sharpness check.
+        A blurry face crop produces a poor embedding and wastes GPU time.
+        """
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+        return variance >= self.quality_lap
+
+    def _insightface_embedding(self, crop: np.ndarray) -> Optional[np.ndarray]:
+        faces = self.app.get(crop)
         if not faces:
             return None
-        # pick the largest face
-        face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-        emb = face.embedding
-        return emb / np.linalg.norm(emb)   # L2 normalise
+        face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0]) * (f.bbox[3]-f.bbox[1]))
+        emb  = face.embedding
+        norm = np.linalg.norm(emb)
+        return emb / norm if norm > 1e-6 else emb
 
-    def _fallback_embedding(self, face_crop: np.ndarray) -> np.ndarray:
-        """
-        HOG-based 128-d descriptor as a last-resort fallback.
-        Not production-grade but keeps the pipeline running.
-        """
-        import cv2
-        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+    def _hog_embedding(self, crop: np.ndarray) -> np.ndarray:
+        gray    = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         resized = cv2.resize(gray, (64, 64))
-        hog = cv2.HOGDescriptor(
-            (64, 64), (16, 16), (8, 8), (8, 8), 9
-        )
-        descriptor = hog.compute(resized).flatten()
-        # truncate / pad to 128
-        descriptor = descriptor[:128] if len(descriptor) >= 128 else np.pad(descriptor, (0, 128 - len(descriptor)))
-        norm = np.linalg.norm(descriptor)
-        return descriptor / norm if norm > 0 else descriptor
+        hog     = cv2.HOGDescriptor((64,64),(16,16),(8,8),(8,8),9)
+        desc    = hog.compute(resized).flatten()
+        desc    = desc[:128] if len(desc) >= 128 \
+                  else np.pad(desc, (0, 128 - len(desc)))
+        norm    = np.linalg.norm(desc)
+        return desc / norm if norm > 1e-6 else desc
 
     # ------------------------------------------------------------------ #
-    #  Matching                                                            #
+    #  Matching helpers (used by IdentityRegistry)                        #
     # ------------------------------------------------------------------ #
 
-    def cosine_similarity(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
-        """Cosine similarity in [-1, 1]; higher = more similar."""
-        return float(np.dot(emb1, emb2))   # embeddings are already L2 normalised
+    def cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
+        return float(np.dot(a, b))   # both already L2-normalised
 
     def find_best_match(
-        self,
-        query_emb: np.ndarray,
-        registered_faces: List[dict],
+        self, query: np.ndarray, faces: List[dict]
     ) -> Tuple[Optional[str], float]:
-        """
-        Compare query embedding against all registered faces.
-
-        Returns:
-            (face_id, similarity) if above threshold, else (None, best_sim).
-        """
-        best_id: Optional[str] = None
-        best_sim: float = -1.0
-
-        for face in registered_faces:
-            stored_emb = np.array(face["embedding"], dtype=np.float32)
-            sim = self.cosine_similarity(query_emb, stored_emb)
+        best_id, best_sim = None, -1.0
+        for face in faces:
+            sim = self.cosine_similarity(query, np.array(face["embedding"], dtype=np.float32))
             if sim > best_sim:
-                best_sim = sim
-                best_id = face["face_id"]
+                best_sim, best_id = sim, face["face_id"]
+        return (best_id, best_sim) if best_sim >= self.threshold else (None, best_sim)
 
-        if best_sim >= self.threshold:
-            return best_id, best_sim
-        return None, best_sim
+    # ------------------------------------------------------------------ #
+    #  Info                                                                #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def active_provider(self) -> str:
+        """OPTIMIZATION 4 — expose active ONNX provider for external checks."""
+        return self._active_provider
