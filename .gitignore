@@ -1,0 +1,35 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.env
+*.egg-info/
+
+# model weights
+*.pt
+*.onnx
+*.pkl
+
+# logs & generated images
+logs/
+!logs/.gitkeep
+
+# MongoDB data
+mongo_data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# sample video (large binary)
+*.mp4
+*.avi
+*.mov

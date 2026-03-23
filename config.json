@@ -1,0 +1,44 @@
+{
+  "detection": {
+    "frame_skip": 3,
+    "confidence_threshold": 0.5,
+    "iou_threshold": 0.4,
+    "yolo_model": "yolov8n-face.pt"
+  },
+  "recognition": {
+    "model_name": "buffalo_l",
+    "embedding_threshold": 0.45,
+    "min_face_size": 40
+  },
+  "tracking": {
+    "max_disappeared": 30,
+    "max_distance": 0.5,
+    "tracker_type": "bytetrack"
+  },
+  "database": {
+    "uri": "mongodb://localhost:27017",
+    "name": "face_tracker_db",
+    "collections": {
+      "faces": "faces",
+      "events": "events",
+      "visitors": "visitors"
+    }
+  },
+  "logging": {
+    "log_file": "logs/events.log",
+    "image_base_dir": "logs",
+    "log_level": "INFO"
+  },
+  "camera": {
+    "source": "sample_video.mp4",
+    "rtsp_url": "rtsp://username:password@ip:port/stream",
+    "use_rtsp": false,
+    "display_window": true,
+    "window_name": "Face Tracker"
+  },
+  "performance": {
+    "use_gpu": true,
+    "num_threads": 4,
+    "batch_size": 1
+  }
+}
