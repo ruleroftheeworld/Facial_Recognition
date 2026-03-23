@@ -55,5 +55,12 @@
     "use_gpu": true,
     "num_threads": 4,
     "batch_size": 1
+  },
+  "analytics": {
+    "dwell_time_threshold": 20,
+    "suspicious_visit_threshold": 5,
+    "suspicious_window_seconds": 3600,
+    "min_frames_for_recognition": 5,
+    "alert_log_file": "logs/alerts.log"
   }
 }

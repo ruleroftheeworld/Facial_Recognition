@@ -58,6 +58,35 @@ class EventLogger:
     #  Public API                                                          #
     # ------------------------------------------------------------------ #
 
+    def log_xai(
+        self,
+        event: str,
+        face_id: str,
+        reason: str,
+        level: str = "info",
+        **extra,
+    ) -> None:
+        """
+        Explainable-AI structured log entry.
+
+        Produces lines like:
+          [INFO] Registered Face ID abc123  Reason: similarity=0.42 < threshold=0.6
+          [INFO] Matched Face ID abc123     Reason: similarity=0.82 > threshold=0.6
+          [ALERT] Face ID xyz flagged       Reason: dwell_time=35.2s > threshold=20s
+
+        Args:
+            event:   human label, e.g. "Registered", "Matched", "Re-ID", "Flagged"
+            face_id: identity
+            reason:  machine-readable reasoning string
+            level:   "info" | "warning" | "error"
+            extra:   additional k=v pairs appended to the line
+        """
+        extra_str = "  ".join(f"{k}={v}" for k, v in extra.items())
+        line = f"[XAI] {event} Face ID {face_id}  Reason: {reason}"
+        if extra_str:
+            line += f"  {extra_str}"
+        self.log(line, level=level)
+
     def log(self, message: str, level: str = "info"):
         """Write a line to events.log."""
         getattr(self._file_logger, level.lower(), self._file_logger.info)(message)

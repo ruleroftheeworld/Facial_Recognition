@@ -170,6 +170,8 @@ class IdentityRegistry:
         embedding: np.ndarray,
         centroid: np.ndarray,
         frame_no: int,
+        event_logger=None,              # XAI: optional EventLogger for reasoning logs
+        match_threshold: float = None,  # XAI: expose for log context
     ) -> Tuple[Optional[str], float, bool]:
         """
         Determine the face_id for a track given a (possibly averaged) embedding.
@@ -190,38 +192,49 @@ class IdentityRegistry:
             return ce.face_id, ce.confidence, False
 
         embedding = self._normalise(embedding)
+        thresh    = match_threshold or self._match_threshold
         self._expire_ghosts()
 
         # 2. Ghost match — most important for crossing re-ID
         ghost_id, ghost_sim = self._match_ghosts(embedding, centroid)
         if ghost_id is not None:
-            logger.info(
-                "Ghost re-ID: track_id=%d → face_id=%s (sim=%.3f)",
-                track_id, ghost_id, ghost_sim,
+            reason = (
+                f"ghost_similarity={ghost_sim:.3f} > "
+                f"ghost_threshold={self._ghost_sim_thresh:.2f} "
+                f"[crossing re-ID]"
             )
+            logger.info("Ghost re-ID: track_id=%d → face_id=%s (%s)", track_id, ghost_id, reason)
+            if event_logger:
+                event_logger.log_xai("Re-ID (ghost)", ghost_id, reason, track_id=track_id)
             self._commit_cache(track_id, ghost_id, ghost_sim, frame_no)
-            # Remove ghost so it isn't matched again
             self._ghosts.pop(ghost_id, None)
             return ghost_id, ghost_sim, False
 
         # 3. Global registry scan
-        reg_id, reg_sim = self._match_registry(embedding, threshold=self._match_threshold)
+        reg_id, reg_sim = self._match_registry(embedding, threshold=thresh)
         if reg_id is not None:
-            logger.info(
-                "Registry match: track_id=%d → face_id=%s (sim=%.3f)",
-                track_id, reg_id, reg_sim,
+            reason = (
+                f"similarity={reg_sim:.3f} > threshold={thresh:.2f}"
             )
+            logger.info("Registry match: track_id=%d → face_id=%s (%s)", track_id, reg_id, reason)
+            if event_logger:
+                event_logger.log_xai("Matched", reg_id, reason, track_id=track_id)
             self._commit_cache(track_id, reg_id, reg_sim, frame_no)
             return reg_id, reg_sim, False
 
         # 4. Duplicate guard — scan at stricter threshold before registering
         dup_id, dup_sim = self._match_registry(embedding, threshold=self._dup_threshold)
         if dup_id is not None:
-            logger.warning(
-                "Duplicate guard triggered: track_id=%d matches face_id=%s "
-                "(sim=%.3f ≥ dup_threshold=%.2f) — reusing.",
-                track_id, dup_id, dup_sim, self._dup_threshold,
+            reason = (
+                f"similarity={dup_sim:.3f} >= dup_threshold={self._dup_threshold:.2f} "
+                f"[duplicate guard, reusing existing ID]"
             )
+            logger.warning(
+                "Duplicate guard triggered: track_id=%d → face_id=%s (%s)",
+                track_id, dup_id, reason,
+            )
+            if event_logger:
+                event_logger.log_xai("Duplicate-guard", dup_id, reason, level="warning", track_id=track_id)
             self._commit_cache(track_id, dup_id, dup_sim, frame_no)
             return dup_id, dup_sim, False
 
@@ -229,7 +242,15 @@ class IdentityRegistry:
         new_id = "face_" + uuid.uuid4().hex[:12]
         self._registry[new_id] = embedding
         self._commit_cache(track_id, new_id, 1.0, frame_no)
-        logger.info("New identity: track_id=%d → face_id=%s", track_id, new_id)
+        # best registry sim was reg_sim (might be negative if registry empty)
+        _, best_sim = self._match_registry(embedding, threshold=-1.0)
+        reason = (
+            f"best_similarity={best_sim:.3f} < threshold={thresh:.2f} "
+            f"[no match found — new identity created]"
+        )
+        logger.info("New identity: track_id=%d → face_id=%s  %s", track_id, new_id, reason)
+        if event_logger:
+            event_logger.log_xai("Registered", new_id, reason, track_id=track_id)
         return new_id, 1.0, True
 
     def update_confidence(

@@ -166,6 +166,96 @@ class MongoManager:
         return self.db[self.collection_names["faces"]].count_documents({})
 
     # ------------------------------------------------------------------ #
+    #  Dwell Time                                                          #
+    # ------------------------------------------------------------------ #
+
+    def update_exit_event_dwell(
+        self,
+        face_id: str,
+        exit_time: datetime,
+        dwell_time: float,
+        category: str,
+    ):
+        """Enrich the most-recent exit event for face_id with dwell analytics."""
+        self.db[self.collection_names["events"]].find_one_and_update(
+            {"face_id": face_id, "event_type": "exit"},
+            {
+                "$set": {
+                    "exit_time":  exit_time,
+                    "dwell_time": dwell_time,
+                    "category":   category,
+                }
+            },
+            sort=[("timestamp", -1)],
+        )
+        logger.debug(
+            "Exit event dwell updated: face=%s dwell=%.1fs cat=%s",
+            face_id, dwell_time, category,
+        )
+
+    def update_visitor_dwell_stats(self, face_id: str, dwell_time: float):
+        """Update rolling avg_dwell_time and total_dwell_time on faces doc."""
+        faces_col = self.db[self.collection_names["faces"]]
+        doc = faces_col.find_one(
+            {"face_id": face_id}, {"visit_count": 1, "total_dwell_time": 1}
+        )
+        if not doc:
+            return
+        total = doc.get("total_dwell_time", 0.0) + dwell_time
+        count = doc.get("visit_count", 1)
+        avg   = total / count if count > 0 else dwell_time
+        faces_col.update_one(
+            {"face_id": face_id},
+            {"$set": {
+                "total_dwell_time": round(total, 2),
+                "avg_dwell_time":   round(avg, 2),
+            }},
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Visitor Intelligence                                                #
+    # ------------------------------------------------------------------ #
+
+    def upsert_visitor_profile(self, face_id: str, profile: Dict[str, Any]):
+        """Upsert returning-visitor fields (visit_count, last_seen, tag) into faces."""
+        self.db[self.collection_names["faces"]].update_one(
+            {"face_id": face_id},
+            {
+                "$set": {
+                    "visit_count": profile["visit_count"],
+                    "last_seen":   profile["last_seen"],
+                    "tag":         profile["tag"],
+                },
+                "$setOnInsert": {"first_seen": profile["first_seen"]},
+            },
+            upsert=True,
+        )
+
+    # ------------------------------------------------------------------ #
+    #  Alerts                                                              #
+    # ------------------------------------------------------------------ #
+
+    def log_alert(
+        self,
+        face_id: str,
+        alert_type: str,
+        reason: str,
+        timestamp: Optional[datetime] = None,
+    ) -> str:
+        """Insert an alert document into the alerts collection."""
+        doc = {
+            "face_id":    face_id,
+            "alert_type": alert_type,
+            "reason":     reason,
+            "timestamp":  timestamp or datetime.utcnow(),
+        }
+        result = self.db["alerts"].insert_one(doc)
+        logger.warning(
+            "ALERT logged: face=%s type=%s reason=%s", face_id, alert_type, reason
+        )
+        return str(result.inserted_id)
+
+    # ------------------------------------------------------------------ #
     #  Stats / Reports                                                     #
     # ------------------------------------------------------------------ #
 
