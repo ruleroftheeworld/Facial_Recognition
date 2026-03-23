@@ -273,7 +273,9 @@ Optimizations:
 * Internet required for first model download
 
 ---
-
+🎥 Demo Video
+https://www.youtube.com/watch?v=1TpCZwFBkP4
+---
 
 ## 🏆 Final Outcome
 
